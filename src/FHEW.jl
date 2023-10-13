@@ -46,6 +46,7 @@ errgen(std, N) = round.(Int, std .* randn(N))
 uniform(dim, modulus) = rand(0:modulus, dim)
 errpolygen(dim, stddev) = round.(Int, stddev .* randn(dim))
 
+
 function encryptLWE(message, dim, modulus, key, stddev)
     ct = uniform(dim + 1, modulus)
     ct[1] = 0
@@ -54,15 +55,17 @@ function encryptLWE(message, dim, modulus, key, stddev)
     ct .= mod.(ct, modulus - 1)
     return ct
 end
+encryptLWE(message, key, c::Context) = encryptLWE(message, c.n, c.q, key, c.stddev)
 
-function decryptLWE(ct, key, c::Context)
-    modulus = c.q
+function decryptLWE(ct, key, modulus::Int)
     beta, alpha = ct[1], ct[2:end]
     m_dec = beta + dot(alpha, key)
     m_dec = mod(m_dec, modulus)
     m_dec = round(Int, m_dec / (modulus ÷ 4))
     return mod(m_dec, 4)
 end
+
+decryptLWE(ct, key, c::Context) = decryptLWE(ct, key, c.q)
 
 function negacyclic_fft(a, N, root_powers)
     a_precomp = (a[1:(N÷2), ..] .+ a[(N÷2+1):end, ..] .* im) .* root_powers
