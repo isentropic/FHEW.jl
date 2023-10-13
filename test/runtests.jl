@@ -18,18 +18,3 @@ using Test, BenchmarkTools
         end
     end
 end
-
-@testset "benchmarking" begin
-    c = generate_context()
-    sk, evk = generate_keys(c)
-
-
-    m0 = 0
-    m1 = 1
-
-    ct0 = encryptLWE(m0, c.n, c.q, sk, c.stddev)
-    ct1 = encryptLWE(m1, c.n, c.q, sk, c.stddev)
-
-    @btime nand_bootstrapping(ct0, ct1, evk, c)
-    @benchmark nand_bootstrapping(ct0, ct1, evk, c)
-end
