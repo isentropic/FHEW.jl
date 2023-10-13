@@ -29,6 +29,7 @@ using Random
     logB::Int = 8
     decomp_shift::Vector{Int} = collect(logQ .- logB .* range(d, 1, step=-1))
     gvector::Vector{Int} = 1 .<< decomp_shift
+    msbmask::Int = reduce(+, (1 << (i + logB - 2) for i in 1:3))
 
     # Gadget decomp for keyswitching
     dks::Int = 2
@@ -139,7 +140,8 @@ function decompose(a, context)
     end
 end
 
-function signed_decompose(a, msbmask, context)
+function signed_decompose(a, context)
+    msbmask = context.msbmask
     da = decompose(a .+ (a .& msbmask), context)
     da .-= decompose((a .& msbmask), context)
 
@@ -180,12 +182,7 @@ end
 function rgswmult(ctfft, rgswfft, context)
     ct = negacyclic_ifft(ctfft, context.Q, context.root_powers_inv)
 
-    msbmask = 0
-    for i in eachindex(context.decomp_shift)
-        msbmask += (1 << (i + context.logB - 2))
-    end
-
-    dct = signed_decompose(ct, msbmask, context)
+    dct = signed_decompose(ct, context)
     dctfft = negacyclic_fft(dct, context.N, context.root_powers)
 
     @einsum gs1[i, j] := rgswfft[i, j, k, l] * dctfft[i, k, l]
