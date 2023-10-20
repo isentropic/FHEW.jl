@@ -39,6 +39,8 @@ using Random
     Bks::Int = 1 << logBks
 
     f_nand::Vector{Int} = zeros(Int, N)
+
+    fftplans::Dict{DataType,AbstractFFTs.Plan{ComplexF64}} = Dict()
 end
 
 keygen(dim) = rand(0:1, dim)
@@ -68,10 +70,43 @@ end
 
 decryptLWE(ct, key, c::Context) = decryptLWE(ct, key, c.q)
 
+function negacyclic_fft(a, c::Context)
+    N = c.N
+    a_precomp = (a[1:(N÷2), ..] .+ a[(N÷2+1):end, ..] .* im) .* c.root_powers
+    t = typeof(a_precomp)
+    if t in keys(c.fftplans)
+        return c.fftplans[t] * a_precomp
+    else
+        plan = plan_fft(similar(a_precomp), 1, flags=FFTW.PATIENT)
+        c.fftplans[t] = plan
+        return plan * a_precomp
+    end
+end
+
 function negacyclic_fft(a, N, root_powers)
     a_precomp = (a[1:(N÷2), ..] .+ a[(N÷2+1):end, ..] .* im) .* root_powers
 
     return fft(a_precomp, 1)  # along the first dimension
+end
+
+function negacyclic_ifft(A, c::Context)
+    Q = c.Q
+    t = typeof(A)
+    if t in keys(c.fftplans)
+        b = c.fftplans[t] * A
+    else
+        plan = plan_ifft(similar(A), 1, flags=FFTW.PATIENT)
+        c.fftplans[t] = plan
+        b = plan * A
+    end
+    b .*= c.root_powers_inv
+
+    a = vcat(real.(b), imag.(b))
+
+    aint = Int.(round.(a))
+    aint .&= Q - 1
+
+    return aint
 end
 
 function negacyclic_ifft(A, Q, root_powers_inv)
@@ -179,16 +214,38 @@ function encryptRGSWfft(z, skfft, context)
     return rgswfft
 end
 
-function rgswmult(ctfft, rgswfft, context)
-    ct = negacyclic_ifft(ctfft, context.Q, context.root_powers_inv)
-
-    dct = signed_decompose(ct, context)
-    dctfft = negacyclic_fft(dct, context.N, context.root_powers)
-
+function rgswmutlhelper(rgswfft, dctfft)
     @einsum gs1[i, j] := rgswfft[i, j, k, l] * dctfft[i, k, l]
-
     return gs1
 end
+function rgswmutlhelper!(result, rgswfft, dctfft)
+    @einsum result[i, j] = rgswfft[i, j, k, l] * dctfft[i, k, l]
+end
+
+function rgswmult(ctfft, rgswfft, context)
+    ct = negacyclic_ifft(ctfft, context)
+
+    dct = signed_decompose(ct, context)
+    dctfft = negacyclic_fft(dct, context)
+
+    return rgswmutlhelper(rgswfft, dctfft)
+    # @einsum gs1[i, j] := rgswfft[i, j, k, l] * dctfft[i, k, l]
+
+    # return gs1
+end
+
+function rgswmult!(result, ctfft, rgswfft, context)
+    ct = negacyclic_ifft(ctfft, context)
+
+    dct = signed_decompose(ct, context)
+    dctfft = negacyclic_fft(dct, context)
+
+    return rgswmutlhelper!(result, rgswfft, dctfft)
+    # @einsum gs1[i, j] := rgswfft[i, j, k, l] * dctfft[i, k, l]
+
+    # return gs1
+end
+
 
 function brkgen(sk, skNfft, context)
     N = context.N
@@ -306,7 +363,7 @@ function nand_bootstrapping(ct0, ct1, eval_keys, context)
 
     acc[:, 1] .= copy(context.f_nand)
 
-    accfft = negacyclic_fft(acc, N, context.root_powers)
+    accfft = negacyclic_fft(acc, context)
     beta = ctsum[1]
     xbeta = zeros(Int, N)
 
@@ -316,7 +373,7 @@ function nand_bootstrapping(ct0, ct1, eval_keys, context)
         xbeta[beta-N+1] = -1
     end
 
-    accfft .*= negacyclic_fft(xbeta, N, context.root_powers)
+    accfft .*= negacyclic_fft(xbeta, context)
 
 
     alpha = ctsum[2:end]
@@ -325,10 +382,10 @@ function nand_bootstrapping(ct0, ct1, eval_keys, context)
     for i in 1:n
         ai = alpha[i]
         partial = rgswmult(accfft, brk[i], context)
-        accfft .+= alphapoly[ai] .* partial
+        accfft .+= alphapoly[ai+1] .* partial
     end
 
-    acc = negacyclic_ifft(accfft, N, context.root_powers_inv)
+    acc = negacyclic_ifft(accfft, context)
 
     beta, alpha = extract(acc)
 
